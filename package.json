@@ -1,6 +1,6 @@
 {
   "name": "@obsidianasecmx/obsidiana-client",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "JavaScript client library for encrypted HTTP and WebSocket communication using the Obsidiana protocol. Automatically performs handshake (PoW + ECDSA + ECDH), encrypts all requests with AES‑GCM‑256, and runs cryptographic operations in a Web Worker (or worker_threads) to keep the main thread responsive.",
   "main": "index.js",
   "files": [
