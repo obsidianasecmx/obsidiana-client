@@ -16,52 +16,93 @@
  */
 
 /**
+ * Yields control back to the JS event loop.
+ *
+ * Used between PoW batches in React Native (main thread) to prevent
+ * blocking UI rendering and touch events during the brute-force search.
+ *
+ * @returns {Promise<void>}
+ * @private
+ */
+function _yield() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
  * Solves a Proof of Work challenge.
  *
  * Brute-forces a nonce until SHA-256(hash + nonce) has the required number
  * of leading zero bits. Nonces start from 0 and increment.
  *
- * @param {string} hash - Challenge hash (hex string, 64 chars)
- * @param {number} difficulty - Required leading zero bits (0-8)
+ * To avoid blocking the main thread (important in React Native where there
+ * is no worker thread), the search is split into batches of `batchSize`
+ * iterations. Between each batch the function yields to the event loop via
+ * `setTimeout(0)`, giving React Native time to process UI events, touches,
+ * and animations without visible freezes.
+ *
+ * Batch sizing heuristic:
+ * - difficulty ≤ 8  → 2 000 hashes/batch  (very fast, tiny batches are fine)
+ * - difficulty ≤ 16 → 500  hashes/batch
+ * - difficulty > 16 → 100  hashes/batch   (heavy work, yield more often)
+ *
+ * In Node.js and browser Web Workers this overhead is negligible because the
+ * worker already runs on a separate thread.
+ *
+ * @param {string} hash       - Challenge hash (hex string, 64 chars)
+ * @param {number} difficulty - Required leading zero bits (0-255)
+ * @param {number} [batchSize] - Hashes per batch before yielding (auto if omitted)
  * @returns {Promise<{ nonce: string, attempts: number }>}
- *          Object containing the found nonce (hex string) and attempt count
+ *          Object with the found nonce (hex string) and total attempt count
  *
  * @example
  * const { nonce, attempts } = await solvePOW('a3f8c2d1...', 4);
  * // nonce = "1a2b3c4d", attempts = 12345
  */
-async function solvePOW(hash, difficulty) {
+async function solvePOW(hash, difficulty, batchSize) {
   const enc = new TextEncoder();
   const fullChars = Math.floor(difficulty / 4);
   const remainder = difficulty % 4;
+
+  // Auto batch size based on difficulty when not provided
+  const BATCH =
+    batchSize ?? (difficulty <= 8 ? 2000 : difficulty <= 16 ? 500 : 100);
+
   let attempts = 0;
+  let batchCount = 0;
 
   while (true) {
-    const nonce = attempts.toString(16);
-    const input = enc.encode(hash + nonce);
-    const buf = await crypto.subtle.digest("SHA-256", input);
-    const digest = Array.from(new Uint8Array(buf), (b) =>
-      b.toString(16).padStart(2, "0"),
-    ).join("");
+    // ── Run one batch of BATCH hashes synchronously ──────────────────────
+    for (let i = 0; i < BATCH; i++) {
+      const nonce = attempts.toString(16);
+      const input = enc.encode(hash + nonce);
+      const buf = await crypto.subtle.digest("SHA-256", input);
+      const digest = Array.from(new Uint8Array(buf), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
 
-    // Check full zero characters
-    let valid = true;
-    for (let i = 0; i < fullChars; i++) {
-      if (digest[i] !== "0") {
-        valid = false;
-        break;
+      // Check full zero hex characters
+      let valid = true;
+      for (let j = 0; j < fullChars; j++) {
+        if (digest[j] !== "0") {
+          valid = false;
+          break;
+        }
       }
+
+      // Check remaining bits (partial hex character)
+      if (valid && remainder > 0) {
+        const val = parseInt(digest[fullChars], 16);
+        const mask = 0xf >> remainder;
+        if (val > mask) valid = false;
+      }
+
+      if (valid) return { nonce, attempts };
+      attempts++;
     }
 
-    // Check remaining bits (partial character)
-    if (valid && remainder > 0) {
-      const val = parseInt(digest[fullChars], 16);
-      const mask = 0xf >> remainder;
-      if (val > mask) valid = false;
-    }
-
-    if (valid) return { nonce, attempts };
-    attempts++;
+    // ── Yield between batches so the JS event loop can breathe ───────────
+    batchCount++;
+    await _yield();
   }
 }
 
@@ -112,11 +153,11 @@ function unpackChallenge(b64) {
  * │ sigLen      │ clientSig    │ skhLen      │ serverKeyHash│
  * └─────────────┴──────────────┴─────────────┴──────────────┘
  *
- * @param {string} ecdhPublicKey - Base64-encoded ECDH public key (65 bytes)
+ * @param {string} ecdhPublicKey   - Base64-encoded ECDH public key (65 bytes)
  * @param {string} signerPublicKey - Base64-encoded client ECDSA public key (65 bytes)
- * @param {string} challengeId - Hex challenge ID (32 chars)
- * @param {string} nonce - PoW nonce solution
- * @param {string} clientSig - Client's ECDSA signature over the challenge
+ * @param {string} challengeId    - Hex challenge ID (32 chars)
+ * @param {string} nonce          - PoW nonce solution
+ * @param {string} clientSig      - Client's ECDSA signature over the challenge
  * @param {string} [serverKeyHash=""] - Hash of server's public key (proof of verification)
  * @returns {string} Base64-encoded offer blob
  *

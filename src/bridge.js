@@ -1,13 +1,14 @@
 "use strict";
 
 /**
- * Obsidiana Worker Bridge — Web Worker abstraction for Node.js and browsers.
+ * Obsidiana Worker Bridge — Web Worker abstraction for Node.js, browsers and React Native.
  *
  * Provides a unified interface for spawning and communicating with Web Workers
- * across Node.js (using `worker_threads`) and browser environments.
+ * across Node.js (using `worker_threads`), browser environments, and React Native
+ * (using an inline shim that runs on the same thread).
  *
  * The bridge handles:
- * - Automatic environment detection (Node.js vs browser)
+ * - Automatic environment detection (Node.js vs browser vs React Native)
  * - Promise-based messaging with request/response correlation
  * - Event-based communication for server-initiated messages
  * - Clean worker termination
@@ -15,6 +16,21 @@
  * @module worker-bridge
  * @private
  */
+
+/**
+ * Detects if the current runtime is React Native.
+ *
+ * React Native exposes `navigator.product === 'ReactNative'` and does NOT
+ * have `process.versions.node`, Blob URLs, or worker_threads.
+ *
+ * @returns {boolean}
+ * @private
+ */
+function _isReactNative() {
+  return (
+    typeof navigator !== "undefined" && navigator.product === "ReactNative"
+  );
+}
 
 /**
  * Bridge class that abstracts Web Worker communication.
@@ -35,7 +51,7 @@
  */
 class WorkerBridge {
   constructor() {
-    /** @private {Worker | null} */
+    /** @private {Worker | object | null} */
     this._worker = null;
     /** @private {Map<number, { resolve: Function, reject: Function }>} */
     this._pending = new Map();
@@ -48,8 +64,9 @@ class WorkerBridge {
   /**
    * Initializes the worker based on the runtime environment.
    *
-   * In Node.js, uses `worker_threads.Worker` with the worker file.
-   * In browsers, creates a Blob URL from the worker code and spawns a Worker.
+   * - **Node.js**: uses `worker_threads.Worker` with the worker file.
+   * - **Browser**: creates a Blob URL from the worker code and spawns a Worker.
+   * - **React Native**: uses `createInlineWorker()` — runs on the main thread.
    *
    * @returns {Promise<void>} Resolves when the worker is ready
    */
@@ -57,25 +74,36 @@ class WorkerBridge {
     return new Promise((resolve, reject) => {
       const isNode = typeof process !== "undefined" && process.versions?.node;
 
+      // ── React Native ────────────────────────────────────────────────────
+      if (_isReactNative()) {
+        const { createInlineWorker } = require("./worker-inline");
+        this._worker = createInlineWorker();
+        this._worker.onmessage = (e) => this._onMessage(e.data);
+        // El inline worker está listo de forma síncrona
+        resolve();
+        return;
+      }
+
+      // ── Node.js ─────────────────────────────────────────────────────────
       if (isNode) {
-        // Node.js environment — use worker_threads
         const { Worker } = require("worker_threads");
         const path = require("path");
         this._worker = new Worker(path.join(__dirname, "worker.js"));
         this._worker.on("message", (msg) => this._onMessage(msg));
         this._worker.on("error", reject);
         this._worker.on("online", resolve);
-      } else {
-        // Browser environment — create Worker from Blob
-        const workerCode = this._getWorkerCode();
-        const blob = new Blob([workerCode], { type: "application/javascript" });
-        const url = URL.createObjectURL(blob);
-        this._worker = new Worker(url);
-        URL.revokeObjectURL(url);
-        this._worker.onmessage = (e) => this._onMessage(e.data);
-        this._worker.onerror = reject;
-        resolve();
+        return;
       }
+
+      // ── Browser ─────────────────────────────────────────────────────────
+      const workerCode = this._getWorkerCode();
+      const blob = new Blob([workerCode], { type: "application/javascript" });
+      const url = URL.createObjectURL(blob);
+      this._worker = new Worker(url);
+      URL.revokeObjectURL(url);
+      this._worker.onmessage = (e) => this._onMessage(e.data);
+      this._worker.onerror = reject;
+      resolve();
     });
   }
 
