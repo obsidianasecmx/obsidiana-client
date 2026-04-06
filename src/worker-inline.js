@@ -3,14 +3,10 @@
 /**
  * Obsidiana Worker Inline — React Native compatible worker shim.
  *
- * En React Native no existen worker_threads ni Web Workers con Blob URLs,
- * así que este módulo expone la misma lógica del worker como un objeto
- * que puede ser invocado directamente en el hilo principal.
+ * In React Native there are no worker_threads or Web Workers with Blob URLs,
+ * so this module exposes the same worker logic as an object that can be
+ * invoked directly on the main thread.
  *
- * El WorkerBridge detecta React Native y usa este shim en vez de
- * intentar lanzar un worker real.
- *
- * @module worker-inline
  * @private
  */
 
@@ -22,10 +18,8 @@ const {
 const { doHandshake } = require("./handshake");
 const { solvePOW, unpackChallenge, packOffer } = require("./pow");
 
-// Lazy-loaded ratchet
 let DoubleRatchet = null;
 
-// Estado de sesión (mismo que en worker.js)
 let _cipher = null;
 let _sessionId = null;
 let _baseUrl = null;
@@ -33,20 +27,23 @@ let _ratchet = null;
 let _wsSockets = {};
 
 /**
- * Lee la server key desde globalThis.__SERVER_KEY__ o vacío.
+ * Reads the server key from globalThis.__SERVER_KEY__.
+ *
  * @returns {string}
  * @private
  */
 function _getServerKey() {
-  if (globalThis.__SERVER_KEY__) {
-    const k = globalThis.__SERVER_KEY__;
-    delete globalThis.__SERVER_KEY__;
+  const serverKey = globalThis.__SERVER_KEY__;
+  if (serverKey) {
+    const k = serverKey;
     return k;
   }
   return "";
 }
 
 /**
+ * Converts a base64 string to Uint8Array.
+ *
  * @param {string} str
  * @returns {Uint8Array}
  * @private
@@ -56,6 +53,8 @@ function _fromBase64(str) {
 }
 
 /**
+ * Converts a Uint8Array to a base64 string.
+ *
  * @param {Uint8Array} buf
  * @returns {string}
  * @private
@@ -65,6 +64,8 @@ function _toBase64(buf) {
 }
 
 /**
+ * Computes SHA‑256 hash of a string and returns hex.
+ *
  * @param {string} str
  * @returns {Promise<string>}
  * @private
@@ -79,10 +80,7 @@ async function _sha256(str) {
 }
 
 /**
- * Crea el objeto InlineWorker que simula la interfaz de un Web Worker.
- *
- * El bridge llama a `worker.postMessage(msg)` y el worker responde
- * llamando a `worker.onmessage({ data: ... })`.
+ * Creates an InlineWorker object that simulates the Web Worker interface.
  *
  * @returns {{ postMessage: Function, onmessage: Function|null, terminate: Function }}
  */
@@ -90,26 +88,17 @@ function createInlineWorker() {
   let _onmessage = null;
   let _terminated = false;
 
-  /**
-   * Despacha una respuesta hacia el bridge (simula postMessage del worker).
-   * @param {object} msg
-   */
   function postBack(msg) {
     if (_terminated) return;
     if (_onmessage) _onmessage({ data: msg });
   }
 
-  /**
-   * Maneja un mensaje entrante (misma lógica que onMessage en worker.js).
-   * @param {object} msg
-   */
   async function handleMessage(msg) {
     if (_terminated) return;
     const { id, type, payload } = msg;
 
     try {
       switch (type) {
-        // ── connect ──────────────────────────────────────────────────────
         case "connect": {
           _baseUrl = payload.url;
           const result = await doHandshake(_baseUrl, fetch, _getServerKey());
@@ -124,7 +113,6 @@ function createInlineWorker() {
           break;
         }
 
-        // ── request ───────────────────────────────────────────────────────
         case "request": {
           const { method, path, body } = payload;
 
@@ -159,7 +147,13 @@ function createInlineWorker() {
             fetchBody = undefined;
           }
 
-          const res = await fetch(url, { method, body: fetchBody });
+          const res = await fetch(url, {
+            method,
+            body: fetchBody,
+            headers: fetchBody
+              ? { "Content-Type": "application/octet-stream" }
+              : undefined,
+          });
 
           if (!res.ok) {
             const err = new Error(`${method} ${path} failed: ${res.status}`);
@@ -208,7 +202,6 @@ function createInlineWorker() {
           break;
         }
 
-        // ── ws:connect ────────────────────────────────────────────────────
         case "ws:connect": {
           const { wsUrl } = payload;
 
@@ -218,7 +211,6 @@ function createInlineWorker() {
           let wsRatchet = null;
           let handshakeDone = false;
 
-          // React Native soporta WebSocket nativo
           const ws = new WebSocket(wsUrl);
           ws.binaryType = "arraybuffer";
 
@@ -239,7 +231,6 @@ function createInlineWorker() {
 
               if (!handshakeDone) {
                 if (!hs) {
-                  // Step 1: challenge + verify
                   const d =
                     typeof msg.d === "string"
                       ? msg.d
@@ -285,20 +276,17 @@ function createInlineWorker() {
                     return;
                   }
 
-                  // Step 2: PoW
                   const challenge = unpackChallenge(blob);
                   const { nonce } = await solvePOW(
                     challenge.hash,
                     challenge.difficulty,
                   );
 
-                  // Step 3: ECDSA keypair
                   const signer = new ObsidianaECDSA();
                   await signer.generateKeypair();
                   const clientSig = await signer.sign(blobBytes);
                   const signerPublicKey = await signer.exportPublicKey();
 
-                  // Step 4: ECDH
                   hs = new ObsidianaHandshake({ signer });
                   await hs.init();
                   const ecdhPublicKey = hs.offer().d;
@@ -315,7 +303,6 @@ function createInlineWorker() {
 
                   ws.send(ObsidianaCBOR.encode({ d: offerBlob }));
                 } else {
-                  // Step 6: complete handshake
                   await hs.complete({ response: msg });
                   wsCipher = hs.cipher;
                   wsSessionId = hs.sessionId;
@@ -325,10 +312,8 @@ function createInlineWorker() {
                     wsRatchet = await DoubleRatchet.create(hs.sharedSecret, 0);
                   }
 
-                  // Notificar ws:ready SIN id (event-style)
                   postBack({ type: "ws:ready", wsUrl });
 
-                  // Registrar handler para mensajes posteriores
                   ws.onmessage = async (event) => {
                     try {
                       const raw = event.data;
@@ -412,7 +397,6 @@ function createInlineWorker() {
           break;
         }
 
-        // ── ws:send ───────────────────────────────────────────────────────
         case "ws:send": {
           const { wsUrl, data } = payload;
           const entry = _wsSockets?.[wsUrl];
@@ -443,7 +427,6 @@ function createInlineWorker() {
           break;
         }
 
-        // ── ws:close ──────────────────────────────────────────────────────
         case "ws:close": {
           const { wsUrl } = payload;
           _wsSockets?.[wsUrl]?.ws.close();
@@ -467,27 +450,20 @@ function createInlineWorker() {
   }
 
   return {
-    /** Simula worker.postMessage() — recibe mensajes del bridge */
     postMessage(msg) {
-      // Ejecutar async sin bloquear
       handleMessage(msg).catch((err) => {
         postBack({ id: msg.id, ok: false, error: err.message });
       });
     },
-
-    /** El bridge asigna su handler aquí */
     set onmessage(fn) {
       _onmessage = fn;
     },
     get onmessage() {
       return _onmessage;
     },
-
-    /** Simula worker.terminate() */
     terminate() {
       _terminated = true;
       _onmessage = null;
-      // Cerrar cualquier WS abierto
       for (const entry of Object.values(_wsSockets)) {
         try {
           entry.ws.close();

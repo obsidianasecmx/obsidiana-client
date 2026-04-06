@@ -1,25 +1,16 @@
 "use strict";
 
 /**
- * Obsidiana Proof of Work — Client-side PoW solver and offer packing.
+ * Obsidiana Proof of Work — Client‑side PoW solver and offer packing.
  *
- * Provides client-side functions for:
- * - Solving PoW challenges (finding nonce that produces leading zero bits)
- * - Unpacking server challenges from base64
- * - Packing client offers with ECDH keys, PoW solution, and signatures
+ * Provides functions for solving PoW challenges (finding nonce that produces
+ * required leading zero bits) and packing/unpacking handshake messages.
  *
- * The PoW algorithm uses SHA-256: client must find a nonce such that
- * SHA-256(hash + nonce) starts with `difficulty` leading zero bits.
- *
- * @module pow-client
  * @private
  */
 
 /**
- * Yields control back to the JS event loop.
- *
- * Used between PoW batches in React Native (main thread) to prevent
- * blocking UI rendering and touch events during the brute-force search.
+ * Yields control back to the event loop.
  *
  * @returns {Promise<void>}
  * @private
@@ -31,47 +22,25 @@ function _yield() {
 /**
  * Solves a Proof of Work challenge.
  *
- * Brute-forces a nonce until SHA-256(hash + nonce) has the required number
- * of leading zero bits. Nonces start from 0 and increment.
+ * Brute‑forces a nonce until SHA‑256(hash + nonce) has the required number
+ * of leading zero bits. Batches iterations to avoid blocking the main thread.
  *
- * To avoid blocking the main thread (important in React Native where there
- * is no worker thread), the search is split into batches of `batchSize`
- * iterations. Between each batch the function yields to the event loop via
- * `setTimeout(0)`, giving React Native time to process UI events, touches,
- * and animations without visible freezes.
- *
- * Batch sizing heuristic:
- * - difficulty ≤ 8  → 2 000 hashes/batch  (very fast, tiny batches are fine)
- * - difficulty ≤ 16 → 500  hashes/batch
- * - difficulty > 16 → 100  hashes/batch   (heavy work, yield more often)
- *
- * In Node.js and browser Web Workers this overhead is negligible because the
- * worker already runs on a separate thread.
- *
- * @param {string} hash       - Challenge hash (hex string, 64 chars)
- * @param {number} difficulty - Required leading zero bits (0-255)
+ * @param {string} hash - Challenge hash (hex string, 64 chars)
+ * @param {number} difficulty - Required leading zero bits (0‑255)
  * @param {number} [batchSize] - Hashes per batch before yielding (auto if omitted)
  * @returns {Promise<{ nonce: string, attempts: number }>}
- *          Object with the found nonce (hex string) and total attempt count
- *
- * @example
- * const { nonce, attempts } = await solvePOW('a3f8c2d1...', 4);
- * // nonce = "1a2b3c4d", attempts = 12345
  */
 async function solvePOW(hash, difficulty, batchSize) {
   const enc = new TextEncoder();
   const fullChars = Math.floor(difficulty / 4);
   const remainder = difficulty % 4;
 
-  // Auto batch size based on difficulty when not provided
   const BATCH =
     batchSize ?? (difficulty <= 8 ? 2000 : difficulty <= 16 ? 500 : 100);
 
   let attempts = 0;
-  let batchCount = 0;
 
   while (true) {
-    // ── Run one batch of BATCH hashes synchronously ──────────────────────
     for (let i = 0; i < BATCH; i++) {
       const nonce = attempts.toString(16);
       const input = enc.encode(hash + nonce);
@@ -80,7 +49,6 @@ async function solvePOW(hash, difficulty, batchSize) {
         b.toString(16).padStart(2, "0"),
       ).join("");
 
-      // Check full zero hex characters
       let valid = true;
       for (let j = 0; j < fullChars; j++) {
         if (digest[j] !== "0") {
@@ -89,7 +57,6 @@ async function solvePOW(hash, difficulty, batchSize) {
         }
       }
 
-      // Check remaining bits (partial hex character)
       if (valid && remainder > 0) {
         const val = parseInt(digest[fullChars], 16);
         const mask = 0xf >> remainder;
@@ -100,27 +67,17 @@ async function solvePOW(hash, difficulty, batchSize) {
       attempts++;
     }
 
-    // ── Yield between batches so the JS event loop can breathe ───────────
-    batchCount++;
     await _yield();
   }
 }
 
 /**
- * Unpacks a base64-encoded challenge blob from the server.
+ * Unpacks a base64‑encoded challenge blob from the server.
  *
- * Wire format:
- * ┌──────────────┬──────────────┬──────────────┬──────────────┐
- * │ id (32 bytes)│ difficulty(1)│ ttl (2 bytes)│ hash (64 bytes)│
- * └──────────────┴──────────────┴──────────────┴──────────────┘
+ * Wire format: id (32 bytes) + difficulty (1) + ttl (2) + hash (64 bytes)
  *
- * @param {string} b64 - Base64-encoded challenge blob
+ * @param {string} b64 - Base64‑encoded challenge blob
  * @returns {{ id: string, hash: string, difficulty: number, ttl: number }}
- *          Decoded challenge object
- *
- * @example
- * const challenge = unpackChallenge(serverChallenge);
- * // { id: "a1b2c3...", hash: "def456...", difficulty: 4, ttl: 30 }
  */
 function unpackChallenge(b64) {
   const bin = atob(b64);
@@ -146,30 +103,16 @@ function unpackChallenge(b64) {
 /**
  * Packs a client offer into a base64 blob for transmission to the server.
  *
- * Wire format (all length-prefixed):
- * ┌─────────────┬──────────────┬─────────────┬──────────────┬─────────────┬──────────────┬─────────────┬──────────────┐
- * │ ecdhKeyLen  │ ecdhKey      │ signerKeyLen│ signerKey    │ challengeLen│ challengeId  │ nonceLen    │ nonce        │
- * ├─────────────┼──────────────┼─────────────┼──────────────┼─────────────┼──────────────┼─────────────┼──────────────┤
- * │ sigLen      │ clientSig    │ skhLen      │ serverKeyHash│
- * └─────────────┴──────────────┴─────────────┴──────────────┘
+ * Wire format: length‑prefixed fields for ECDH key, signer key, challenge ID,
+ * nonce, client signature, and server key hash.
  *
- * @param {string} ecdhPublicKey   - Base64-encoded ECDH public key (65 bytes)
- * @param {string} signerPublicKey - Base64-encoded client ECDSA public key (65 bytes)
- * @param {string} challengeId    - Hex challenge ID (32 chars)
- * @param {string} nonce          - PoW nonce solution
- * @param {string} clientSig      - Client's ECDSA signature over the challenge
- * @param {string} [serverKeyHash=""] - Hash of server's public key (proof of verification)
- * @returns {string} Base64-encoded offer blob
- *
- * @example
- * const offer = packOffer(
- *   ecdhPublicKey,
- *   signerPublicKey,
- *   challenge.id,
- *   nonce,
- *   clientSig,
- *   serverKeyHash
- * );
+ * @param {string} ecdhPublicKey - Base64‑encoded ECDH public key (65 bytes)
+ * @param {string} signerPublicKey - Base64‑encoded client ECDSA public key (65 bytes)
+ * @param {string} challengeId - Hex challenge ID (32 chars)
+ * @param {string} nonce - PoW nonce solution
+ * @param {string} clientSig - Client's ECDSA signature over the challenge
+ * @param {string} [serverKeyHash=""] - Hash of server's public key
+ * @returns {string} Base64‑encoded offer blob
  */
 function packOffer(
   ecdhPublicKey,
@@ -202,42 +145,36 @@ function packOffer(
   );
   let offset = 0;
 
-  // ecdhPublicKey
   buf[offset] = (ecdh.length >> 8) & 0xff;
   buf[offset + 1] = ecdh.length & 0xff;
   offset += 2;
   buf.set(ecdh, offset);
   offset += ecdh.length;
 
-  // signerPublicKey
   buf[offset] = (signer.length >> 8) & 0xff;
   buf[offset + 1] = signer.length & 0xff;
   offset += 2;
   buf.set(signer, offset);
   offset += signer.length;
 
-  // challengeId
   buf[offset] = (cid.length >> 8) & 0xff;
   buf[offset + 1] = cid.length & 0xff;
   offset += 2;
   buf.set(cid, offset);
   offset += cid.length;
 
-  // nonce
   buf[offset] = (n.length >> 8) & 0xff;
   buf[offset + 1] = n.length & 0xff;
   offset += 2;
   buf.set(n, offset);
   offset += n.length;
 
-  // clientSig
   buf[offset] = (sig.length >> 8) & 0xff;
   buf[offset + 1] = sig.length & 0xff;
   offset += 2;
   buf.set(sig, offset);
   offset += sig.length;
 
-  // serverKeyHash
   buf[offset] = (skh.length >> 8) & 0xff;
   buf[offset + 1] = skh.length & 0xff;
   offset += 2;

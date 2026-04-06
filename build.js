@@ -1,23 +1,13 @@
 "use strict";
 
 /**
- * Obsidiana Client Builder — Build script for browser bundles.
+ * Obsidiana Client Builder — Build script for browser and Node.js bundles.
  *
- * Bundles the Obsidiana client for browser environments using esbuild,
- * with heavy obfuscation and server key embedding. The worker code is
- * heavily protected with:
- * - Control flow flattening
- * - Dead code injection
- * - Base64-encoded string arrays
- * - Multi-XOR key splitting (3 parts, 6 fragments)
- * - Random variable names per build
+ * Bundles the Obsidiana client for browser environments (ESM, UMD, minified)
+ * and for Node.js (CommonJS) using esbuild, with heavy obfuscation and server key embedding.
+ * The worker code is heavily protected with control flow flattening, dead code injection,
+ * base64‑encoded string arrays, and multi‑XOR key splitting.
  *
- * Outputs three formats:
- * - `obsidiana-client.js` — ESM with obfuscation (optional)
- * - `obsidiana-client.umd.js` — UMD/IIFE with obfuscation
- * - `obsidiana-client.min.js` — ESM with minification only
- *
- * @module builder
  * @private
  */
 
@@ -26,23 +16,19 @@ const fs = require("fs");
 const path = require("path");
 const JavaScriptObfuscator = require("javascript-obfuscator");
 
-/** Output directory for built bundles. @private */
 const DIST = path.join(__dirname, "dist");
 
-/**
- * esbuild defines for browser compatibility.
- * @private
- */
-const DEFINE = {
+const DEFINE_BROWSER = {
   "process.versions.node": "undefined",
   global: "globalThis",
 };
 
+const DEFINE_NODE = {
+  global: "globalThis",
+};
+
 /**
- * Generates a random variable name that looks like obfuscator output.
- *
- * Format: `_0x` + 8 random hex chars. Changes on every build to prevent
- * static analysis from identifying the key storage variable.
+ * Generates a random variable name for the key storage slot.
  *
  * @returns {string} Random variable name (e.g., "_0xa3f8c2d1")
  * @private
@@ -54,18 +40,14 @@ function generateKeyVarName() {
   return `_0x${hex}`;
 }
 
-/** Path to the Web Worker source file. @private */
 const workerPath = path.join(__dirname, "src", "worker.js");
+const workerInlinePath = path.join(__dirname, "src", "worker-inline.js");
 
 /**
- * Bundles the Web Worker with esbuild and applies multi-XOR key obfuscation.
- *
- * The server key is split into 3 parts XORed with 3 different random masks.
- * The key is reconstructed at runtime and immediately nulled out after use.
- * No complete key string exists anywhere in the bundle at rest.
+ * Bundles the Web Worker with esbuild and applies multi‑XOR key obfuscation.
  *
  * @param {string} serverKey - Server identity public key (base64)
- * @param {string} keyVarName - Random variable name for this build
+ * @param {string} keyVarName - Random variable name (unused but kept for compatibility)
  * @returns {Promise<string>} Obfuscated worker code
  * @private
  */
@@ -80,7 +62,7 @@ async function bundleWorker(serverKey = "", keyVarName) {
     platform: "browser",
     target: ["es2020"],
     external: ["worker_threads", "ws", "path", "crypto"],
-    define: DEFINE,
+    define: DEFINE_BROWSER,
     resolveExtensions: [".js"],
     alias: {
       "obsidiana-client": path.join(__dirname, "index.js"),
@@ -89,15 +71,10 @@ async function bundleWorker(serverKey = "", keyVarName) {
 
   let code = result.outputFiles[0].text;
 
-  // Replace sentinel with random variable name
-  code = code.replaceAll("__SERVER_KEY__", keyVarName);
-
   if (serverKey) {
-    // Multi-XOR: Split key into 3 parts XORed with 3 different masks
     const keyBytes = Buffer.from(serverKey, "utf8");
     const keyLength = keyBytes.length;
 
-    // Create 3 different random masks
     const masks = [
       Buffer.from(
         Array.from({ length: keyLength }, () =>
@@ -116,12 +93,10 @@ async function bundleWorker(serverKey = "", keyVarName) {
       ),
     ];
 
-    // Apply triple XOR: key ^ mask1 ^ mask2 ^ mask3 = result
     const xored1 = Buffer.from(keyBytes.map((b, i) => b ^ masks[0][i]));
     const xored2 = Buffer.from(keyBytes.map((b, i) => b ^ masks[1][i]));
     const xored3 = Buffer.from(keyBytes.map((b, i) => b ^ masks[2][i]));
 
-    // Encode everything in base64
     const xored1B64 = xored1.toString("base64");
     const xored2B64 = xored2.toString("base64");
     const xored3B64 = xored3.toString("base64");
@@ -129,12 +104,6 @@ async function bundleWorker(serverKey = "", keyVarName) {
     const mask2B64 = masks[1].toString("base64");
     const mask3B64 = masks[2].toString("base64");
 
-    /**
-     * Fragments a string into random-sized chunks for obfuscation.
-     * @param {string} str - String to fragment
-     * @returns {string} JavaScript expression concatenating fragments
-     * @private
-     */
     function fragment(str) {
       const chunks = [];
       let pos = 0;
@@ -146,7 +115,6 @@ async function bundleWorker(serverKey = "", keyVarName) {
       return chunks.join(" + ");
     }
 
-    // Random names for all fragments
     const parts = {
       x1: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
       x2: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
@@ -156,7 +124,6 @@ async function bundleWorker(serverKey = "", keyVarName) {
       m3: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
     };
 
-    // Declare all fragmented parts
     const xorPreamble =
       [
         `var ${parts.x1} = ${fragment(xored1B64)};`,
@@ -167,24 +134,21 @@ async function bundleWorker(serverKey = "", keyVarName) {
         `var ${parts.m3} = ${fragment(mask3B64)};`,
       ].join("\n") + "\n";
 
-    // Multi-XOR decoder with immediate cleanup
-    const xorDecode =
-      [
-        `var ${keyVarName}=(function(){`,
-        `var _a=atob(${parts.x1}),_b=atob(${parts.x2}),_c=atob(${parts.x3});`,
-        `var _d=atob(${parts.m1}),_e=atob(${parts.m2}),_f=atob(${parts.m3});`,
-        `var _o="";`,
-        `for(var _i=0;_i<_a.length;_i++){`,
-        `  _o+=String.fromCharCode(_a.charCodeAt(_i)^_b.charCodeAt(_i)^_c.charCodeAt(_i)^_d.charCodeAt(_i)^_e.charCodeAt(_i)^_f.charCodeAt(_i));`,
-        `}`,
-        `_a=null;_b=null;_c=null;_d=null;_e=null;_f=null;`,
-        `${parts.x1}=null;${parts.x2}=null;${parts.x3}=null;`,
-        `${parts.m1}=null;${parts.m2}=null;${parts.m3}=null;`,
-        `return _o;`,
-        `})();`,
-      ].join("\n") + "\n";
+    const xorDecode = `
+      (function() {
+        var _a = atob(${parts.x1}), _b = atob(${parts.x2}), _c = atob(${parts.x3});
+        var _d = atob(${parts.m1}), _e = atob(${parts.m2}), _f = atob(${parts.m3});
+        var _o = "";
+        for (var _i = 0; _i < _a.length; _i++) {
+          _o += String.fromCharCode(_a.charCodeAt(_i) ^ _b.charCodeAt(_i) ^ _c.charCodeAt(_i) ^ _d.charCodeAt(_i) ^ _e.charCodeAt(_i) ^ _f.charCodeAt(_i));
+        }
+        globalThis.__SERVER_KEY__ = _o;
+        _a = null; _b = null; _c = null; _d = null; _e = null; _f = null;
+        ${parts.x1} = null; ${parts.x2} = null; ${parts.x3} = null;
+        ${parts.m1} = null; ${parts.m2} = null; ${parts.m3} = null;
+      })();
+    `;
 
-    // Insert decoder as the first instruction inside esbuild's IIFE
     const iifeOpen = "(function(){";
     const iifeIdx = code.indexOf(iifeOpen);
     if (iifeIdx !== -1) {
@@ -198,13 +162,11 @@ async function bundleWorker(serverKey = "", keyVarName) {
       code = xorPreamble + xorDecode + code;
     }
   } else {
-    const injection = `var ${keyVarName} = "";\n`;
-    code = injection + code;
+    code = `globalThis.__SERVER_KEY__ = "";\n` + code;
   }
 
   console.log(`   -> Worker size (raw): ${(code.length / 1024).toFixed(1)} KB`);
 
-  // Heavy obfuscation for the worker
   const obfuscated = JavaScriptObfuscator.obfuscate(code, {
     compact: true,
     controlFlowFlattening: true,
@@ -237,10 +199,149 @@ async function bundleWorker(serverKey = "", keyVarName) {
 }
 
 /**
+ * Bundles the React Native inline worker (worker‑inline.js) with obfuscation.
+ *
+ * @param {string} serverKey - Server identity public key (base64)
+ * @param {string} keyVarName - Random variable name (unused)
+ * @returns {Promise<string>} Obfuscated CJS worker‑inline code
+ * @private
+ */
+async function bundleWorkerInline(serverKey = "", keyVarName) {
+  console.log(" -> Bundling worker-inline (React Native)...");
+
+  const result = await esbuild.build({
+    entryPoints: [workerInlinePath],
+    bundle: true,
+    write: false,
+    format: "cjs",
+    platform: "browser",
+    target: ["es2020"],
+    external: ["ws", "path", "crypto"],
+    define: DEFINE_BROWSER,
+    resolveExtensions: [".js"],
+  });
+
+  let code = result.outputFiles[0].text;
+
+  if (serverKey) {
+    const keyBytes = Buffer.from(serverKey, "utf8");
+    const keyLength = keyBytes.length;
+
+    const masks = [
+      Buffer.from(
+        Array.from({ length: keyLength }, () =>
+          Math.floor(Math.random() * 256),
+        ),
+      ),
+      Buffer.from(
+        Array.from({ length: keyLength }, () =>
+          Math.floor(Math.random() * 256),
+        ),
+      ),
+      Buffer.from(
+        Array.from({ length: keyLength }, () =>
+          Math.floor(Math.random() * 256),
+        ),
+      ),
+    ];
+
+    const xored1 = Buffer.from(keyBytes.map((b, i) => b ^ masks[0][i]));
+    const xored2 = Buffer.from(keyBytes.map((b, i) => b ^ masks[1][i]));
+    const xored3 = Buffer.from(keyBytes.map((b, i) => b ^ masks[2][i]));
+
+    const x1B64 = xored1.toString("base64");
+    const x2B64 = xored2.toString("base64");
+    const x3B64 = xored3.toString("base64");
+    const m1B64 = masks[0].toString("base64");
+    const m2B64 = masks[1].toString("base64");
+    const m3B64 = masks[2].toString("base64");
+
+    function fragment(str) {
+      const chunks = [];
+      let pos = 0;
+      while (pos < str.length) {
+        const size = 2 + Math.floor(Math.random() * 5);
+        chunks.push(JSON.stringify(str.slice(pos, pos + size)));
+        pos += size;
+      }
+      return chunks.join(" + ");
+    }
+
+    const parts = {
+      x1: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
+      x2: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
+      x3: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
+      m1: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
+      m2: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
+      m3: "_0x" + Math.random().toString(36).slice(2, 10).padEnd(8, "0"),
+    };
+
+    const xorPreamble =
+      [
+        `var ${parts.x1} = ${fragment(x1B64)};`,
+        `var ${parts.x2} = ${fragment(x2B64)};`,
+        `var ${parts.x3} = ${fragment(x3B64)};`,
+        `var ${parts.m1} = ${fragment(m1B64)};`,
+        `var ${parts.m2} = ${fragment(m2B64)};`,
+        `var ${parts.m3} = ${fragment(m3B64)};`,
+      ].join("\n") + "\n";
+
+    const xorDecode = `
+      (function() {
+        var _a = atob(${parts.x1}), _b = atob(${parts.x2}), _c = atob(${parts.x3});
+        var _d = atob(${parts.m1}), _e = atob(${parts.m2}), _f = atob(${parts.m3});
+        var _o = "";
+        for (var _i = 0; _i < _a.length; _i++) {
+          _o += String.fromCharCode(_a.charCodeAt(_i) ^ _b.charCodeAt(_i) ^ _c.charCodeAt(_i) ^ _d.charCodeAt(_i) ^ _e.charCodeAt(_i) ^ _f.charCodeAt(_i));
+        }
+        globalThis.__SERVER_KEY__ = _o;
+        _a = null; _b = null; _c = null; _d = null; _e = null; _f = null;
+        ${parts.x1} = null; ${parts.x2} = null; ${parts.x3} = null;
+        ${parts.m1} = null; ${parts.m2} = null; ${parts.m3} = null;
+      })();
+    `;
+
+    code = xorPreamble + xorDecode + code;
+  } else {
+    code = `globalThis.__SERVER_KEY__ = "";\n` + code;
+  }
+
+  console.log(
+    `   -> Worker-inline size (raw): ${(code.length / 1024).toFixed(1)} KB`,
+  );
+
+  const obfuscated = JavaScriptObfuscator.obfuscate(code, {
+    compact: true,
+    controlFlowFlattening: true,
+    controlFlowFlatteningThreshold: 0.75,
+    deadCodeInjection: true,
+    deadCodeInjectionThreshold: 0.4,
+    stringArray: true,
+    stringArrayEncoding: ["base64"],
+    stringArrayThreshold: 1.0,
+    stringArrayRotate: true,
+    stringArrayShuffle: true,
+    identifierNamesGenerator: "hexadecimal",
+    simplify: true,
+    transformObjectKeys: true,
+    rotateStringArray: true,
+    selfDefending: false,
+    renameGlobals: false,
+    seed: Math.floor(Math.random() * 1000000),
+  });
+
+  const obfuscatedCode = obfuscated.getObfuscatedCode();
+  console.log(
+    `   -> Worker-inline size (obfuscated): ${(obfuscatedCode.length / 1024).toFixed(1)} KB`,
+  );
+  return obfuscatedCode;
+}
+
+/**
  * Creates esbuild plugins for worker injection.
  *
  * @param {string} serverKey - Server identity public key
- * @param {string} keyVarName - Random variable name for key storage
+ * @param {string} keyVarName - Random variable name
  * @returns {object[]} esbuild plugin array
  * @private
  */
@@ -250,16 +351,18 @@ function makePlugins(serverKey, keyVarName) {
     setup(build) {
       build.onLoad({ filter: /bridge\.js$/ }, async (args) => {
         let contents = fs.readFileSync(args.path, "utf-8");
-
         const workerBundle = await bundleWorker(serverKey, keyVarName);
-
         const escapedWorkerCode = JSON.stringify(workerBundle);
         const newContents = contents.replace(
           /_getWorkerCode\(\)\s*\{\s*return\s*"";\s*\}/,
           `_getWorkerCode() { return ${escapedWorkerCode}; }`,
         );
-
         return { contents: newContents, loader: "js" };
+      });
+
+      build.onLoad({ filter: /worker-inline\.js$/ }, async (args) => {
+        const inlineBundle = await bundleWorkerInline(serverKey, keyVarName);
+        return { contents: inlineBundle, loader: "js" };
       });
     },
   };
@@ -292,16 +395,7 @@ function obfuscateBundle(inputPath, outputPath) {
 }
 
 /**
- * Builds the Obsidiana client bundles for browser distribution.
- *
- * Generates three output formats:
- * - ESM with obfuscation (or minified if obfuscation disabled)
- * - UMD/IIFE with obfuscation
- * - Minified ESM (always minified)
- *
- * The worker code is heavily obfuscated with control flow flattening,
- * dead code injection, and multi-XOR key splitting. The server key slot
- * name changes on every build.
+ * Builds the Obsidiana client bundles for browser and Node.js distribution.
  *
  * @param {object} [options] - Build options
  * @param {string} [options.serverKey] - Server identity public key (base64)
@@ -309,15 +403,6 @@ function obfuscateBundle(inputPath, outputPath) {
  * @param {string} [options.copyTo] - Additional directory to copy bundles to
  * @param {boolean} [options.obfuscate=true] - Whether to obfuscate final bundles
  * @returns {Promise<void>}
- *
- * @example
- * const { buildClient } = require('./build');
- *
- * await buildClient({
- *   serverKey: 'BASE64_SERVER_PUBLIC_KEY',
- *   outDir: './dist',
- *   obfuscate: true
- * });
  */
 async function buildClient(options = {}) {
   const {
@@ -327,7 +412,6 @@ async function buildClient(options = {}) {
     obfuscate = true,
   } = options;
 
-  // Generate fresh random variable name for this build
   const keyVarName = generateKeyVarName();
   console.log(` -> Key slot: ${keyVarName} (changes every build)`);
 
@@ -362,7 +446,6 @@ async function buildClient(options = {}) {
     fs.mkdirSync(tempDir, { recursive: true });
   }
 
-  // Build ESM bundle
   const esmTemp = path.join(tempDir, "obsidiana-client.tmp.js");
   await esbuild.build({
     entryPoints: ["index.js"],
@@ -373,9 +456,9 @@ async function buildClient(options = {}) {
     outfile: esmTemp,
     plugins,
     external: ["worker_threads", "ws", "path", "crypto"],
-    define: DEFINE,
+    define: DEFINE_BROWSER,
   });
-  console.log(" -> Built ESM");
+  console.log(" -> Built ESM (browser)");
 
   if (obfuscate) {
     obfuscateBundle(esmTemp, path.join(outputDir, "obsidiana-client.js"));
@@ -383,7 +466,6 @@ async function buildClient(options = {}) {
     fs.copyFileSync(esmTemp, path.join(outputDir, "obsidiana-client.js"));
   }
 
-  // Build UMD/IIFE bundle
   const umdTemp = path.join(tempDir, "obsidiana-client.umd.tmp.js");
   await esbuild.build({
     entryPoints: ["index.js"],
@@ -395,9 +477,9 @@ async function buildClient(options = {}) {
     outfile: umdTemp,
     plugins,
     external: ["worker_threads", "ws", "path", "crypto"],
-    define: DEFINE,
+    define: DEFINE_BROWSER,
   });
-  console.log(" -> Built UMD");
+  console.log(" -> Built UMD (browser)");
 
   if (obfuscate) {
     obfuscateBundle(umdTemp, path.join(outputDir, "obsidiana-client.umd.js"));
@@ -405,7 +487,6 @@ async function buildClient(options = {}) {
     fs.copyFileSync(umdTemp, path.join(outputDir, "obsidiana-client.umd.js"));
   }
 
-  // Build minified ESM (no extra obfuscation)
   await esbuild.build({
     entryPoints: ["index.js"],
     bundle: true,
@@ -416,19 +497,39 @@ async function buildClient(options = {}) {
     outfile: path.join(outputDir, "obsidiana-client.min.js"),
     plugins,
     external: ["worker_threads", "ws", "path", "crypto"],
-    define: DEFINE,
+    define: DEFINE_BROWSER,
   });
   console.log(" -> obsidiana-client.min.js (minified only)");
 
-  // Cleanup temp directory
+  const nodeOut = path.join(outputDir, "obsidiana-client.node.js");
+  await esbuild.build({
+    entryPoints: ["index.js"],
+    bundle: true,
+    platform: "node",
+    target: ["node18"],
+    format: "cjs",
+    outfile: nodeOut,
+    plugins,
+    external: ["worker_threads", "ws", "path", "crypto"],
+    define: DEFINE_NODE,
+  });
+
+  if (obfuscate) {
+    obfuscateBundle(nodeOut, path.join(outputDir, "obsidiana-client.node.js"));
+  } else {
+    fs.copyFileSync(nodeOut, path.join(outputDir, "obsidiana-client.node.js"));
+  }
+
+  console.log(" -> Built CommonJS for Node.js");
+
   fs.rmSync(tempDir, { recursive: true, force: true });
 
-  // Copy bundles to additional location if specified
   if (copyTo && copyTo !== outputDir && fs.existsSync(copyTo)) {
     for (const file of [
       "obsidiana-client.js",
       "obsidiana-client.umd.js",
       "obsidiana-client.min.js",
+      "obsidiana-client.node.js",
     ]) {
       const srcPath = path.join(outputDir, file);
       const destPath = path.join(copyTo, file);
@@ -447,11 +548,10 @@ async function buildClient(options = {}) {
   console.log(`     • String array rotation and shuffle`);
   console.log(`     • Object key transformation`);
   console.log(`     • Multi-XOR key splitting (3 parts, 6 fragments)`);
-  console.log(`   - Final bundle is obfuscated`);
+  console.log(`   - Final bundles are obfuscated (except .min.js)`);
   console.log(`   - Server key slot name changes on every build`);
 }
 
-// Run build if executed directly
 if (require.main === module) {
   console.log("Building obsidiana-client with HEAVY worker obfuscation...\n");
   buildClient({ obfuscate: true })
