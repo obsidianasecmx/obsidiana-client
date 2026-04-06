@@ -1,11 +1,13 @@
 "use strict";
 
 /**
- * WorkerBridge — communication layer between main thread and crypto worker.
+ * Worker Bridge — Communication layer between main thread and crypto worker.
  *
- * Abstracts away the differences between Web Workers (browsers), worker_threads (Node.js),
- * and React Native (inline worker shim). Provides a promise‑based messaging API.
+ * Provides a Promise-based messaging interface to a Web Worker (or worker_thread)
+ * that handles all cryptographic operations. The bridge automatically manages
+ * message IDs, pending promises, and event routing.
  *
+ * @module bridge
  * @private
  */
 
@@ -17,21 +19,12 @@ function _isReactNative() {
 
 class WorkerBridge {
   constructor() {
-    /** @private {Worker|null} */
     this._worker = null;
-    /** @private {Map<number, { resolve: Function, reject: Function }>} */
     this._pending = new Map();
-    /** @private {Map<string, Function[]>} */
     this._handlers = new Map();
-    /** @private {number} */
     this._msgId = 0;
   }
 
-  /**
-   * Initialises the worker (or inline shim).
-   *
-   * @returns {Promise<void>}
-   */
   init() {
     return new Promise((resolve, reject) => {
       const isNode = typeof process !== "undefined" && process.versions?.node;
@@ -76,23 +69,10 @@ class WorkerBridge {
     });
   }
 
-  /**
-   * Returns the worker code (overridden by build system).
-   *
-   * @returns {string}
-   * @private
-   */
   _getWorkerCode() {
     return "";
   }
 
-  /**
-   * Sends a message to the worker and returns a promise for the response.
-   *
-   * @param {string} type - Message type (e.g., "connect", "request", "ws:send")
-   * @param {object} payload - Message payload
-   * @returns {Promise<any>} Resolves with worker's response
-   */
   send(type, payload = {}) {
     return new Promise((resolve, reject) => {
       const id = ++this._msgId;
@@ -101,31 +81,16 @@ class WorkerBridge {
     });
   }
 
-  /**
-   * Registers an event handler for worker‑initiated events (e.g., "ws:message").
-   *
-   * @param {string} event - Event name
-   * @param {Function} fn - Callback receiving the message
-   */
   on(event, fn) {
     if (!this._handlers.has(event)) this._handlers.set(event, []);
     this._handlers.get(event).push(fn);
   }
 
-  /**
-   * Terminates the worker and cleans up.
-   */
   terminate() {
     this._worker?.terminate?.();
     this._worker = null;
   }
 
-  /**
-   * Handles incoming messages from the worker.
-   *
-   * @param {object} msg - Worker message
-   * @private
-   */
   _onMessage(msg) {
     if (!msg.id) {
       const fns = this._handlers.get(msg.type) ?? [];

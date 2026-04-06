@@ -7,6 +7,7 @@
  * so this module exposes the same worker logic as an object that can be
  * invoked directly on the main thread.
  *
+ * @module worker-inline
  * @private
  */
 
@@ -27,8 +28,7 @@ let _ratchet = null;
 let _wsSockets = {};
 
 /**
- * Reads the server key from globalThis.__SERVER_KEY__.
- *
+ * Reads the server key from globalThis.__SERVER_KEY__ or empty string.
  * @returns {string}
  * @private
  */
@@ -43,7 +43,6 @@ function _getServerKey() {
 
 /**
  * Converts a base64 string to Uint8Array.
- *
  * @param {string} str
  * @returns {Uint8Array}
  * @private
@@ -54,7 +53,6 @@ function _fromBase64(str) {
 
 /**
  * Converts a Uint8Array to a base64 string.
- *
  * @param {Uint8Array} buf
  * @returns {string}
  * @private
@@ -64,8 +62,7 @@ function _toBase64(buf) {
 }
 
 /**
- * Computes SHA‑256 hash of a string and returns hex.
- *
+ * Computes SHA-256 hash of a string and returns it as hex.
  * @param {string} str
  * @returns {Promise<string>}
  * @private
@@ -455,12 +452,14 @@ function createInlineWorker() {
         postBack({ id: msg.id, ok: false, error: err.message });
       });
     },
+
     set onmessage(fn) {
       _onmessage = fn;
     },
     get onmessage() {
       return _onmessage;
     },
+
     terminate() {
       _terminated = true;
       _onmessage = null;

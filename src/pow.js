@@ -1,16 +1,17 @@
 "use strict";
 
 /**
- * Obsidiana Proof of Work — Client‑side PoW solver and offer packing.
+ * Obsidiana Proof of Work — Client-side PoW solver and offer packing.
  *
- * Provides functions for solving PoW challenges (finding nonce that produces
- * required leading zero bits) and packing/unpacking handshake messages.
+ * Provides client-side functions for solving PoW challenges, unpacking
+ * server challenges, and packing client offers.
  *
+ * @module pow-client
  * @private
  */
 
 /**
- * Yields control back to the event loop.
+ * Yields control back to the JS event loop.
  *
  * @returns {Promise<void>}
  * @private
@@ -22,13 +23,14 @@ function _yield() {
 /**
  * Solves a Proof of Work challenge.
  *
- * Brute‑forces a nonce until SHA‑256(hash + nonce) has the required number
- * of leading zero bits. Batches iterations to avoid blocking the main thread.
+ * Brute-forces a nonce until SHA-256(hash + nonce) has the required number
+ * of leading zero bits. Nonces start from 0 and increment.
  *
  * @param {string} hash - Challenge hash (hex string, 64 chars)
- * @param {number} difficulty - Required leading zero bits (0‑255)
+ * @param {number} difficulty - Required leading zero bits (0-255)
  * @param {number} [batchSize] - Hashes per batch before yielding (auto if omitted)
  * @returns {Promise<{ nonce: string, attempts: number }>}
+ *          Object with the found nonce (hex string) and total attempt count
  */
 async function solvePOW(hash, difficulty, batchSize) {
   const enc = new TextEncoder();
@@ -39,6 +41,7 @@ async function solvePOW(hash, difficulty, batchSize) {
     batchSize ?? (difficulty <= 8 ? 2000 : difficulty <= 16 ? 500 : 100);
 
   let attempts = 0;
+  let batchCount = 0;
 
   while (true) {
     for (let i = 0; i < BATCH; i++) {
@@ -67,17 +70,17 @@ async function solvePOW(hash, difficulty, batchSize) {
       attempts++;
     }
 
+    batchCount++;
     await _yield();
   }
 }
 
 /**
- * Unpacks a base64‑encoded challenge blob from the server.
+ * Unpacks a base64-encoded challenge blob from the server.
  *
- * Wire format: id (32 bytes) + difficulty (1) + ttl (2) + hash (64 bytes)
- *
- * @param {string} b64 - Base64‑encoded challenge blob
+ * @param {string} b64 - Base64-encoded challenge blob
  * @returns {{ id: string, hash: string, difficulty: number, ttl: number }}
+ *          Decoded challenge object
  */
 function unpackChallenge(b64) {
   const bin = atob(b64);
@@ -103,16 +106,13 @@ function unpackChallenge(b64) {
 /**
  * Packs a client offer into a base64 blob for transmission to the server.
  *
- * Wire format: length‑prefixed fields for ECDH key, signer key, challenge ID,
- * nonce, client signature, and server key hash.
- *
- * @param {string} ecdhPublicKey - Base64‑encoded ECDH public key (65 bytes)
- * @param {string} signerPublicKey - Base64‑encoded client ECDSA public key (65 bytes)
+ * @param {string} ecdhPublicKey - Base64-encoded ECDH public key (65 bytes)
+ * @param {string} signerPublicKey - Base64-encoded client ECDSA public key (65 bytes)
  * @param {string} challengeId - Hex challenge ID (32 chars)
  * @param {string} nonce - PoW nonce solution
  * @param {string} clientSig - Client's ECDSA signature over the challenge
- * @param {string} [serverKeyHash=""] - Hash of server's public key
- * @returns {string} Base64‑encoded offer blob
+ * @param {string} [serverKeyHash=""] - Hash of server's public key (proof of verification)
+ * @returns {string} Base64-encoded offer blob
  */
 function packOffer(
   ecdhPublicKey,

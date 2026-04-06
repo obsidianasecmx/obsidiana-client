@@ -4,14 +4,17 @@
  * Obsidiana WebSocket Client — Encrypted WebSocket client with automatic handshake.
  *
  * Provides a WebSocket client that automatically handles the Obsidiana handshake
- * and encrypts all messages using AES‑GCM‑256. Cryptographic operations run in
- * a Web Worker (or worker_thread) to keep the main thread responsive.
+ * and encrypts all messages using AES-GCM-256.
  *
+ * @module ws-client
  * @public
  */
 
 const { WorkerBridge } = require("./bridge");
 
+/**
+ * Encrypted WebSocket client with automatic handshake and message encryption.
+ */
 class ObsidianaWSClient {
   /**
    * Creates a new Obsidiana WebSocket client.
@@ -24,21 +27,24 @@ class ObsidianaWSClient {
     if (!options.url)
       throw new Error("[obsidiana-client/ws] options.url is required");
 
-    /** @private {string} */
+    /** @private {string} WebSocket URL */
     this._url = options.url;
-    /** @private {WorkerBridge} */
+
+    /** @private {WorkerBridge} Bridge to the crypto worker */
     this._bridge = new WorkerBridge();
-    /** @private {Map<string, Function[]>} */
+
+    /** @private {Map<string, Function[]>} Event handlers */
     this._handlers = new Map();
-    /** @private {boolean} */
+
+    /** @private {boolean} Whether the handshake is complete */
     this._ready = false;
   }
 
   /**
    * Connects to the server and performs the full Obsidiana handshake.
    *
-   * @returns {Promise<this>} Current instance for chaining
-   * @throws {Error} If handshake times out (30 seconds) or verification fails
+   * @returns {Promise<this>} Current instance for method chaining
+   * @throws {Error} If handshake times out or verification fails
    */
   async connect() {
     await this._bridge.init();
@@ -99,8 +105,8 @@ class ObsidianaWSClient {
   /**
    * Sends an encrypted message over the WebSocket.
    *
-   * @param {any} data - JSON‑serializable data to encrypt and send
-   * @returns {Promise<void>}
+   * @param {any} data - JSON-serializable data to encrypt and send
+   * @returns {Promise<void>} Resolves when message is sent
    * @throws {Error} If client is not connected
    */
   send(data) {
@@ -111,9 +117,9 @@ class ObsidianaWSClient {
   /**
    * Registers an event handler.
    *
-   * @param {string} event - Event name ("open", "message", "close", "error")
+   * @param {string} event - Event name (open, message, close, error)
    * @param {Function} fn - Callback function
-   * @returns {this}
+   * @returns {this} Current instance for method chaining
    */
   on(event, fn) {
     if (!this._handlers.has(event)) this._handlers.set(event, []);
@@ -155,7 +161,7 @@ class ObsidianaWSClient {
    * Emits an event to all registered handlers.
    *
    * @param {string} event - Event name
-   * @param {...any} args - Arguments to pass
+   * @param {...any} args - Arguments to pass to handlers
    * @private
    */
   _emit(event, ...args) {

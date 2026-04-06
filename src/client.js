@@ -4,16 +4,17 @@
  * Obsidiana HTTP Client — Encrypted HTTP client with automatic handshake.
  *
  * Provides an HTTP client that automatically handles the Obsidiana handshake
- * and encrypts all requests / decrypts all responses using AES‑GCM‑256.
+ * and encrypts all requests/decrypts all responses using AES-GCM-256.
  *
- * Cryptographic operations run in a Web Worker (or worker_thread) to keep the
- * main thread responsive.
- *
+ * @module client
  * @public
  */
 
 const { WorkerBridge } = require("./bridge");
 
+/**
+ * Encrypted HTTP client with automatic handshake and request/response encryption.
+ */
 class ObsidianaClient {
   /**
    * Creates a new Obsidiana HTTP client.
@@ -28,16 +29,16 @@ class ObsidianaClient {
 
     /** @private {string} Base URL without trailing slash */
     this._url = options.url.replace(/\/$/, "");
-    /** @private {WorkerBridge} */
+    /** @private {WorkerBridge} Bridge to the crypto worker */
     this._bridge = new WorkerBridge();
-    /** @private {boolean} */
+    /** @private {boolean} Whether the client is connected and handshake complete */
     this._connected = false;
   }
 
   /**
    * Connects to the server and performs the full Obsidiana handshake.
    *
-   * @returns {Promise<this>} Current instance for chaining
+   * @returns {Promise<this>} Current instance for method chaining
    */
   async connect() {
     await this._bridge.init();
@@ -50,7 +51,6 @@ class ObsidianaClient {
    * Performs an encrypted GET request.
    *
    * @param {string} path - Request path (e.g., '/api/users/42')
-   * @param {object} [body={}] - Request body (ignored for GET, kept for consistency)
    * @returns {Promise<any>} Decrypted response body
    */
   get(path, body = {}) {
@@ -60,7 +60,7 @@ class ObsidianaClient {
   /**
    * Performs an encrypted POST request.
    *
-   * @param {string} path - Request path
+   * @param {string} path - Request path (e.g., '/api/users')
    * @param {object} [body={}] - Request body (will be encrypted)
    * @returns {Promise<any>} Decrypted response body
    */
@@ -71,7 +71,7 @@ class ObsidianaClient {
   /**
    * Performs an encrypted PUT request.
    *
-   * @param {string} path - Request path
+   * @param {string} path - Request path (e.g., '/api/users/42')
    * @param {object} [body={}] - Request body (will be encrypted)
    * @returns {Promise<any>} Decrypted response body
    */
@@ -82,7 +82,7 @@ class ObsidianaClient {
   /**
    * Performs an encrypted PATCH request.
    *
-   * @param {string} path - Request path
+   * @param {string} path - Request path (e.g., '/api/users/42')
    * @param {object} [body={}] - Request body (will be encrypted)
    * @returns {Promise<any>} Decrypted response body
    */
@@ -93,8 +93,8 @@ class ObsidianaClient {
   /**
    * Performs an encrypted DELETE request.
    *
-   * @param {string} path - Request path
-   * @param {object} [body={}] - Request body (will be encrypted)
+   * @param {string} path - Request path (e.g., '/api/users/42')
+   * @param {object} [body={}] - Request body (optional, will be encrypted)
    * @returns {Promise<any>} Decrypted response body
    */
   delete(path, body = {}) {
@@ -104,10 +104,11 @@ class ObsidianaClient {
   /**
    * Internal method to send an encrypted HTTP request via the worker.
    *
-   * @param {string} method - HTTP method
+   * @param {string} method - HTTP method (GET, POST, etc.)
    * @param {string} path - Request path
-   * @param {object} body - Request body
-   * @returns {Promise<any>}
+   * @param {object} [body={}] - Request body
+   * @returns {Promise<any>} Decrypted response body
+   * @throws {Error} If client is not connected
    * @private
    */
   _request(method, path, body = {}) {
@@ -118,7 +119,7 @@ class ObsidianaClient {
   /**
    * Asserts that the client is connected.
    *
-   * @throws {Error} If `connect()` has not been called
+   * @throws {Error} If `connect()` has not been called or connection failed
    * @private
    */
   _assertConnected() {

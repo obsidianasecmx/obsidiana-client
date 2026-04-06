@@ -4,13 +4,14 @@
  * Obsidiana Handshake — Full cryptographic handshake over HTTP.
  *
  * Performs the complete Obsidiana handshake sequence:
- * 1. GET /q → receive PoW challenge + server ECDSA signature
+ * 1. GET /q — receive PoW challenge + server ECDSA signature
  * 2. Verify server identity using ObsidianaECDSA.verify()
  * 3. Solve PoW challenge
  * 4. Generate ephemeral client ECDSA keypair and sign challenge
  * 5. Complete ECDH key exchange
- * 6. Derive AES‑GCM‑256 session key
+ * 6. Derive AES-GCM-256 session key
  *
+ * @module handshake
  * @private
  */
 
@@ -22,7 +23,7 @@ const {
 const { solvePOW, unpackChallenge, packOffer } = require("./pow");
 
 /**
- * Computes SHA‑256 hash of a string and returns hex digest.
+ * Computes SHA-256 hash of a string and returns hex digest.
  *
  * @param {string} str - Input string
  * @returns {Promise<string>} Hex digest (64 chars)
@@ -38,12 +39,13 @@ async function sha256(str) {
 }
 
 /**
- * Performs the full Obsidiana handshake.
+ * Performs the full Obsidiana handshake: PoW → ECDH with mutual authentication.
  *
- * @param {string} baseUrl - Server base URL
+ * @param {string} baseUrl - Server base URL (e.g., 'https://api.example.com')
  * @param {Function} fetchFn - Fetch implementation (native fetch or polyfill)
- * @param {string} [serverKey=""] - Base64‑encoded server identity public key
+ * @param {string} [serverKey=""] - Base64-encoded server identity public key
  * @returns {Promise<{ cipher: object, sessionId: string, sharedSecret: Uint8Array }>}
+ *          Handshake result containing AES cipher, session ID, and raw shared secret
  * @throws {Error} If server identity verification fails, PoW fails, or handshake errors
  */
 async function doHandshake(baseUrl, fetchFn, serverKey = "") {

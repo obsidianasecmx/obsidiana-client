@@ -4,9 +4,9 @@
  * Obsidiana Worker — Web Worker for encrypted HTTP and WebSocket communication.
  *
  * Runs cryptographic operations in a separate thread (worker_threads in Node.js,
- * Web Worker in browsers) to keep the main thread responsive. Handles handshake,
- * encryption/decryption, and WebSocket framing.
+ * Web Worker in browsers) to keep the main thread responsive.
  *
+ * @module worker
  * @private
  */
 
@@ -29,9 +29,7 @@ try {
 /**
  * Retrieves the server's public key from the environment.
  *
- * Priority: globalThis.__SERVER_KEY__ (bundled) → .obsidiana/server.pub (Node.js).
- *
- * @returns {string} Base64‑encoded server public key
+ * @returns {string} Base64-encoded server public key (65 bytes)
  * @private
  */
 function _getServerKey() {
@@ -64,8 +62,8 @@ function _getServerKey() {
 /**
  * Converts a base64 string to Uint8Array.
  *
- * @param {string} str
- * @returns {Uint8Array}
+ * @param {string} str - Base64-encoded string
+ * @returns {Uint8Array} Decoded bytes
  * @private
  */
 function _fromBase64(str) {
@@ -75,8 +73,8 @@ function _fromBase64(str) {
 /**
  * Converts a Uint8Array to base64 string.
  *
- * @param {Uint8Array} buf
- * @returns {string}
+ * @param {Uint8Array} buf - Bytes to encode
+ * @returns {string} Base64-encoded string
  * @private
  */
 function _toBase64(buf) {
@@ -84,10 +82,10 @@ function _toBase64(buf) {
 }
 
 /**
- * Computes SHA‑256 hash of a string and returns hex.
+ * Computes SHA-256 hash of a string and returns hex digest.
  *
- * @param {string} str
- * @returns {Promise<string>}
+ * @param {string} str - Input string
+ * @returns {Promise<string>} Hex digest (64 chars)
  * @private
  */
 async function _sha256(str) {

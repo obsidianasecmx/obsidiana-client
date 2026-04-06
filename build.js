@@ -5,9 +5,8 @@
  *
  * Bundles the Obsidiana client for browser environments (ESM, UMD, minified)
  * and for Node.js (CommonJS) using esbuild, with heavy obfuscation and server key embedding.
- * The worker code is heavily protected with control flow flattening, dead code injection,
- * base64‑encoded string arrays, and multi‑XOR key splitting.
  *
+ * @module builder
  * @private
  */
 
@@ -16,19 +15,28 @@ const fs = require("fs");
 const path = require("path");
 const JavaScriptObfuscator = require("javascript-obfuscator");
 
+/** Output directory for built bundles. @private */
 const DIST = path.join(__dirname, "dist");
 
+/**
+ * esbuild defines for browser compatibility.
+ * @private
+ */
 const DEFINE_BROWSER = {
   "process.versions.node": "undefined",
   global: "globalThis",
 };
 
+/**
+ * esbuild defines for Node.js bundle.
+ * @private
+ */
 const DEFINE_NODE = {
   global: "globalThis",
 };
 
 /**
- * Generates a random variable name for the key storage slot.
+ * Generates a random variable name that looks like obfuscator output.
  *
  * @returns {string} Random variable name (e.g., "_0xa3f8c2d1")
  * @private
@@ -40,14 +48,17 @@ function generateKeyVarName() {
   return `_0x${hex}`;
 }
 
+/** Path to the Web Worker source file. @private */
 const workerPath = path.join(__dirname, "src", "worker.js");
+
+/** Path to the React Native inline worker source file. @private */
 const workerInlinePath = path.join(__dirname, "src", "worker-inline.js");
 
 /**
- * Bundles the Web Worker with esbuild and applies multi‑XOR key obfuscation.
+ * Bundles the Web Worker with esbuild and applies multi-XOR key obfuscation.
  *
  * @param {string} serverKey - Server identity public key (base64)
- * @param {string} keyVarName - Random variable name (unused but kept for compatibility)
+ * @param {string} keyVarName - Random variable name
  * @returns {Promise<string>} Obfuscated worker code
  * @private
  */
@@ -199,11 +210,11 @@ async function bundleWorker(serverKey = "", keyVarName) {
 }
 
 /**
- * Bundles the React Native inline worker (worker‑inline.js) with obfuscation.
+ * Bundles the React Native inline worker with esbuild and applies obfuscation.
  *
  * @param {string} serverKey - Server identity public key (base64)
- * @param {string} keyVarName - Random variable name (unused)
- * @returns {Promise<string>} Obfuscated CJS worker‑inline code
+ * @param {string} keyVarName - Random variable name
+ * @returns {Promise<string>} Obfuscated CJS worker-inline code
  * @private
  */
 async function bundleWorkerInline(serverKey = "", keyVarName) {
